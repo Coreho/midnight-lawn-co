@@ -51,11 +51,19 @@ const normStreet = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9 ]/g, "
 const SUFFIX = /\b(STREET|ST|AVENUE|AVE|ROAD|RD|BOULEVARD|BLVD|PARKWAY|PKWY|DRIVE|DR|LANE|LN|COURT|CT|PLACE|PL|CIRCLE|CIR|TERRACE|TER|WAY|HIGHWAY|HWY)\b/g;
 const streetKey = (s) => normStreet(s).replace(SUFFIX, "").replace(/\b(NORTH|SOUTH|EAST|WEST|N|S|E|W)\b/g, "").replace(/\s+/g, " ").trim();
 
-async function geocode(address, env) {
+export async function geocode(address, env) {
   const params = new URLSearchParams({ address, benchmark: "Public_AR_Current", vintage: "Current_Current", layers: "Counties" });
   const data = await env.jsonp(`${SOURCES.census}?${params}`, 25000);
-  const m = data && data.result && data.result.addressMatches && data.result.addressMatches[0];
+  const matches = data && data.result && data.result.addressMatches || [];
+  const exact = matches.filter((m) => m.matchType === "Exact");
+  const candidates = exact.length ? exact : matches;
+  if (candidates.length > 1) throw new SurveyError("ambiguous-address", "More than one address matches. Add the city and ZIP code so we can pick the right one.");
+  const m = candidates[0];
   if (!m) throw new SurveyError("no-match", "We couldn't find that address. Check the house number and street, and add the city.");
+  if (!Number.isFinite(m.coordinates?.x) || !Number.isFinite(m.coordinates?.y)) throw new SurveyError("no-match", "The address lookup did not return a usable location. Check the address and try again.");
+  const requestedNumber = (String(address).match(/^\s*(\d+)/) || [])[1];
+  const returnedNumber = (String(m.matchedAddress).match(/^\s*(\d+)/) || [])[1];
+  if (requestedNumber && returnedNumber && requestedNumber !== returnedNumber) throw new SurveyError("no-match", "The lookup returned a different house number. Check the number, street and city.");
   const county = (m.geographies && m.geographies.Counties && m.geographies.Counties[0]) || {};
   const a = m.addressComponents || {};
   /* a second number on the same block tells us which way the numbers run, and so which side of
@@ -70,12 +78,13 @@ async function geocode(address, env) {
       try {
         const d2 = await env.jsonp(`${SOURCES.census.replace("geographies", "locations")}?${new URLSearchParams({ address: `${n2} ${street}, ${a.city}, ${a.state} ${a.zip}`, benchmark: "Public_AR_Current" })}`, 15000);
         const m2 = d2 && d2.result && d2.result.addressMatches && d2.result.addressMatches[0];
-        if (m2) {
+        if (m2 && streetKey(m2.addressComponents?.streetName || "") === streetKey(a.streetName) && Number.isFinite(m2.coordinates?.x) && Number.isFinite(m2.coordinates?.y)) {
           const up = n2 > num ? 1 : -1, k = Math.cos(m.coordinates.y * Math.PI / 180);
           let dx = (m2.coordinates.x - m.coordinates.x) * up * k, dy = (m2.coordinates.y - m.coordinates.y) * up;
           if (+a.toAddress < +a.fromAddress) { dx = -dx; dy = -dy; }   /* ranges that run backwards along their edge */
           const L = Math.hypot(dx, dy);
-          if (L > 1e-7) dir = [dx / L, dy / L];
+          // A cross-block or nearly identical fallback pin does not establish street direction.
+          if (L > 1e-7 && L < .005) dir = [dx / L, dy / L];
         }
       } catch { /* no direction: the picker still lets them choose */ }
     }
@@ -182,7 +191,7 @@ async function streetMap(ctx, env) {
     const tn = layers.transportation_name, tr = layers.transportation, hn = layers.housenumber;
     if (tn) for (const f of tn.features) if (f.type === 2 && f.props.name) for (const part of f.parts) roads.push({ name: f.props.name, cls: f.props.class, pts: part.map((p) => toLocal(tn, p)), named: true });
     if (tr) for (const f of tr.features) if (f.type === 2 && ["minor", "tertiary", "secondary", "primary", "trunk", "residential", "unclassified"].includes(f.props.class) && f.props.brunnel !== "tunnel") for (const part of f.parts) roads.push({ name: "", cls: f.props.class, pts: part.map((p) => toLocal(tr, p)), named: false });
-    if (hn) for (const f of hn.features) if (f.type === 1) for (const part of f.parts) numbers.push({ num: String(f.props.housenumber), at: toLocal(hn, part[0]) });
+    if (hn) for (const f of hn.features) if (f.type === 1) for (const part of f.parts) numbers.push({ num: String(f.props.housenumber), street: f.props["addr:street"] || f.props.street || "", at: toLocal(hn, part[0]) });
   });
   /* keep what touches the survey box */
   /* a long straight street can have no vertex anywhere near the house: test segments, not points */
@@ -222,7 +231,7 @@ async function lidar(ctx, env, onProgress) {
   await walk(0, 0, 0, 0, await getHier("0-0-0-0"));
   if (!nodes.length) throw new SurveyError("no-lidar", "There's no laser survey for this spot.");
 
-  if (!lazPerfPromise) lazPerfPromise = env.lazPerf();
+  if (!lazPerfPromise) lazPerfPromise = env.lazPerf().catch((e) => { lazPerfPromise = null; throw e; });
   const LazPerf = await lazPerfPromise;
   let done = 0, bytes = 0;
   const chunks = await pool(nodes, 6, async (key) => {
@@ -316,6 +325,7 @@ export function analyzeSite({ geo, ctx, streets, points: P, photo }) {
   for (let i = 0; i < P.n; i++) if (P.cls[i] === 2) { const c = idx1(P.e[i], P.nn[i]); if (c >= 0) { gSum[c] += P.z[i]; gCnt[c]++; } }
   const dem = new Float32Array(N1 * N1); const known = new Uint8Array(N1 * N1);
   for (let c = 0; c < dem.length; c++) if (gCnt[c]) { dem[c] = gSum[c] / gCnt[c]; known[c] = 1; }
+  if (!known.some(Boolean)) throw new SurveyError("no-ground", "The laser survey has no usable ground measurements here. Try another address or use a typical lawn.");
   fillHoles(dem, known, N1);
   smooth(dem, N1, 1);
   const demAt = (e, n) => bilinear(dem, N1, (e + HALF) / DEM_CS - .5, (n + HALF) / DEM_CS - .5);
@@ -349,10 +359,10 @@ export function analyzeSite({ geo, ctx, streets, points: P, photo }) {
     for (const c of comp) { multi += multiHigh[c]; high += firstHigh[c] + lastHigh[c]; }
     const cellSet = new Set(comp);
     const pts = [];
-    for (let i = 0; i < P.n; i++) if (hag[i] > 1.6 && P.cls[i] !== 2 && cellSet.has(idx1(P.e[i], P.nn[i]))) pts.push([P.e[i], P.nn[i], hag[i], P.nr[i]]);
+    for (let i = 0; i < P.n; i++) if (hag[i] > 1.6 && P.cls[i] !== 2 && cellSet.has(idx1(P.e[i], P.nn[i]))) pts.push([P.e[i], P.nn[i], hag[i], P.nr[i], P.cls[i]]);
     if (pts.length < 20) continue;
     const singleFrac = pts.filter((p) => p[3] === 1).length / pts.length;
-    if (singleFrac < .55) continue;                          /* a tree crown, not a roof */
+    if (singleFrac < .55 && pts.filter((p) => p[4] === 6).length < 20) continue; /* explicit building returns outrank the canopy heuristic */
     if (pct(pts.map((p) => p[2]), .9) < 2.6) continue;       /* a car or a fence */
     buildings.push({ id: buildings.length, cells: comp, pts });
   }
@@ -378,8 +388,8 @@ export function analyzeSite({ geo, ctx, streets, points: P, photo }) {
   for (const bld of buildings) {
     const cx = bld.pts.reduce((s, p) => s + p[0], 0) / bld.pts.length, cy = bld.pts.reduce((s, p) => s + p[1], 0) / bld.pts.length;
     const st = nearestOn(streets.roads, cx, cy);
-    /* roofs from single returns only: branches over a roof come back as several returns */
-    const roofPts = bld.pts.filter((p) => p[3] === 1);
+    /* Single returns and classified building returns: exclude unclassified overhanging branches. */
+    const roofPts = bld.pts.filter((p) => p[3] === 1 || p[4] === 6);
     const { rects } = fitBuilding(roofPts.length >= 20 ? roofPts : bld.pts, st ? Math.atan2(st.ty, st.tx) : null);
     /* houses a few feet apart can share one blob: rectangles that don't touch are separate buildings */
     for (const group of groupRects(rects)) {
@@ -461,28 +471,48 @@ export function analyzeSite({ geo, ctx, streets, points: P, photo }) {
     const st = nearestOn(roadLines, b.cx, b.cy);
     return { perp: st ? st.d : 99 };
   };
-  /* an OpenStreetMap house number at this address beats interpolation */
-  const hit = streets.numbers.find((h) => h.num === geo.number);
-  const anchor = hit ? hit.at : [0, 0];
-  let target = null, bestScore = Infinity;
-  for (const b of houses) {
-    const inside = hit && b.rects.some((r) => pointInRect(hit.at, r));
-    const { perp } = streetSide(b);
-    const wrongSide = geo.sideVec && !hit && (b.cx - (addrOnStreet ? addrOnStreet.x : 0)) * geo.sideVec[0] + (b.cy - (addrOnStreet ? addrOnStreet.y : 0)) * geo.sideVec[1] < 0;
-    const score = (inside ? -100 : 0) + Math.hypot(b.cx - anchor[0], b.cy - anchor[1]) + (perp > 40 ? 40 : 0) + (wrongSide ? 60 : 0);
-    if (score < bestScore) { bestScore = score; target = b; }
-  }
+  const selection = selectAddressHouse(houses, geo, streets.numbers, addrOnStreet);
+  const target = selection.target;
   /* the picker offers the houses that front the same street, in order along it */
   const along = (b) => (addrOnStreet ? (b.cx - addrOnStreet.x) * addrOnStreet.tx + (b.cy - addrOnStreet.y) * addrOnStreet.ty : b.cx);
   const fronting = houses.filter((b) => streetSide(b).perp < 40).sort((a, b) => along(a) - along(b));
   /* "osm": OpenStreetMap has this exact number here. "range": the Census only knows the block, so
      the house is the likeliest one for that number on that side, and the buyer should check it. */
-  geo.matchedBy = hit && target && target.rects.some((r) => pointInRect(hit.at, { ...r, len: r.len + 4, wid: r.wid + 4 })) ? "osm" : "range";
+  geo.matchedBy = selection.matchedBy;
+  geo.matchedTargetId = target?.id ?? null;
   return {
     geo, half: HALF, demCs: DEM_CS, dem, n1: N1, surface, paving, buildings, trees, shrubs, roads, street,
     houses: (fronting.length ? fronting : houses).map((b) => b.id), targetId: target ? target.id : null,
     numbers: streets.numbers, photoOk: !!photo, photo, lidar: { points: P.n, bytes: P.bytes, files: P.files },
   };
+}
+
+/* Address points can be interpolated onto the road. Compare frontage and footprint distance,
+   not just building centers (which favor shallow houses and detached garages).
+   A number is exact evidence only when it lies on a plausible house on the correct street side. */
+export function selectAddressHouse(houses, geo, numbers, street) {
+  const distance = (p, b) => Math.min(...b.rects.map((r) => {
+    const c = Math.cos(r.ang), s = Math.sin(r.ang), dx = p[0] - r.cx, dy = p[1] - r.cy;
+    return Math.hypot(Math.max(0, Math.abs(dx * c + dy * s) - r.len / 2), Math.max(0, Math.abs(-dx * s + dy * c) - r.wid / 2));
+  }));
+  const wrongSide = (b) => geo.sideVec && (b.cx - (street?.x || 0)) * geo.sideVec[0] + (b.cy - (street?.y || 0)) * geo.sideVec[1] < -1;
+  const markers = numbers.filter((h) => h.num === geo.number && (!h.street || streetKey(h.street) === geo.streetKey));
+  const exact = new Map();
+  for (const h of markers) for (const b of houses) {
+    if (!wrongSide(b) && distance(h.at, b) <= .75) {
+      const d = Math.hypot(h.at[0], h.at[1]);
+      if (!exact.has(b.id) || d < exact.get(b.id).d) exact.set(b.id, { b, d });
+    }
+  }
+  const confirmed = [...exact.values()].sort((a, b) => a.d - b.d);
+  // Duplicate numbers on intersecting streets must not silently become an exact match.
+  if (confirmed.length && (!confirmed[1] || confirmed[1].d - confirmed[0].d > 5)) return { target: confirmed[0].b, matchedBy: "osm" };
+  const ranked = houses.map((b) => {
+    const along = street ? Math.abs((b.cx - street.x) * street.tx + (b.cy - street.y) * street.ty) : 0;
+    const depth = street ? Math.abs((b.cx - street.x) * -street.ty + (b.cy - street.y) * street.tx) : 0;
+    return { b, score: distance([0, 0], b) + along * .65 + Math.max(0, depth - 25) * 1.5 + (wrongSide(b) ? 80 : 0) };
+  }).sort((a, b) => a.score - b.score);
+  return { target: ranked[0]?.b || null, matchedBy: "range" };
 }
 
 /* rectangles that touch (within 0.6 m) belong to the same building */
@@ -587,7 +617,7 @@ const pointInRect = ([x, y], r) => {
 };
 
 /* ------------------------------------------------------------------ buildings: rectangles and roofs */
-function fitBuilding(pts, streetAng) {
+export function fitBuilding(pts, streetAng) {
   /* orientation: the angle (mod 90°) whose bounding box hugs the roof points best */
   const ang0 = streetAng == null ? 0 : ((streetAng % (Math.PI / 2)) + Math.PI / 2) % (Math.PI / 2);
   const boxFor = (a) => {
@@ -600,9 +630,12 @@ function fitBuilding(pts, streetAng) {
   for (let d = 0; d < 90; d += 2) { const bx = boxFor(d * Math.PI / 180); if (!best || bx.area < best.area) best = bx; }
   /* snap to the street grid when it's close: houses are built square to their street */
   const diff = Math.abs(((best.a - ang0 + Math.PI / 4) % (Math.PI / 2) + Math.PI / 2) % (Math.PI / 2) - Math.PI / 4);
-  if (streetAng != null && diff < 14 * Math.PI / 180) best = boxFor(ang0);
+  if (streetAng != null && diff < 14 * Math.PI / 180) {
+    const snapped = boxFor(ang0);
+    if (snapped.area <= best.area * 1.025) best = snapped;
+  }
   const a = best.a, c = Math.cos(a), s = Math.sin(a);
-  /* rasterise the footprint at 0.5 m in the box frame, then cut it into up to three rectangles */
+  /* Rasterise at 0.5 m and retain up to six substantial wings rather than flattening complex houses. */
   const cs = .5, nu = Math.max(1, Math.ceil((best.u1 - best.u0) / cs)), nv = Math.max(1, Math.ceil((best.v1 - best.v0) / cs));
   let grid = new Uint8Array(nu * nv);
   const pu = [], pv = [];
@@ -617,10 +650,10 @@ function fitBuilding(pts, streetAng) {
   if (fill > .84) rects.push({ i0: 0, j0: 0, i1: nu, j1: nv });
   else {
     const g = grid.slice();
-    for (let k = 0; k < 3; k++) {
+    for (let k = 0; k < 6; k++) {
       const r = maxRect(g, nu, nv);
-      if (!r || (r.i1 - r.i0) * (r.j1 - r.j0) * cs * cs < (k ? 9 : 20)) break;
-      if (k && Math.min(r.i1 - r.i0, r.j1 - r.j0) * cs < 2.4) break;   /* eaves and porch slivers */
+      if (!r || (r.i1 - r.i0) * (r.j1 - r.j0) * cs * cs < (k ? 6 : 20)) break;
+      if (k && Math.min(r.i1 - r.i0, r.j1 - r.j0) * cs < 2) break;
       rects.push(r);
       for (let j = r.j0; j < r.j1; j++) for (let i = r.i0; i < r.i1; i++) g[j * nu + i] = 0;
     }
@@ -669,22 +702,35 @@ function maxRect(g, nu, nv) {
   }
   return best;
 }
-function fitRoof(hs, us, vs, len, wid) {
+export function fitRoof(hs, us, vs, len, wid) {
   if (hs.length < 6) return { eave: 3, ridge: 5, roof: "gable" };
   const eave = Math.max(2.4, pct(hs, .12)), ridge = Math.max(eave + .2, pct(hs, .97));
   if (ridge - eave < .7) return { eave: Math.max(2.4, pct(hs, .6)), ridge: Math.max(2.4, pct(hs, .6)), roof: "flat" };
-  const a = len / 2, b = wid / 2, rise = ridge - eave;
+  const a = len / 2, b = wid / 2;
   const models = {
-    gable: (u, v) => ridge - rise * clamp(Math.abs(v) / b, 0, 1),
-    "gable-cross": (u, v) => ridge - rise * clamp(Math.abs(u) / a, 0, 1),
-    hip: (u, v) => ridge - rise * clamp(Math.max(Math.abs(v) / b, (Math.abs(u) - (a - b)) / b), 0, 1),
+    gable: (u, v) => 1 - clamp(Math.abs(v) / b, 0, 1),
+    "gable-cross": (u, v) => 1 - clamp(Math.abs(u) / a, 0, 1),
+    hip: (u, v) => 1 - clamp(Math.max(Math.abs(v) / b, (Math.abs(u) - (a - b)) / b), 0, 1),
   };
-  let best = "gable", err = Infinity;
+  let best = { eave, ridge, roof: "gable" }, err = Infinity;
   for (const [name, f] of Object.entries(models)) {
-    const e = median(hs.map((h, i) => Math.abs(h - f(us[i], vs[i]))));
-    if (e < err - .03) { err = e; best = name; }
+    const weights = hs.map((h, i) => f(us[i], vs[i]));
+    let low = eave, rise = ridge - eave, keep = hs.map((h, i) => i);
+    // Robustly fit eave and ridge to the roof slopes; chimney/branch outliers are trimmed.
+    for (let pass = 0; pass < 3; pass++) {
+      let sw = 0, sh = 0, sww = 0, swh = 0;
+      for (const i of keep) { const w = weights[i]; sw += w; sh += hs[i]; sww += w * w; swh += w * hs[i]; }
+      const n = keep.length, det = n * sww - sw * sw;
+      if (det < 1e-6) break;
+      rise = clamp((n * swh - sw * sh) / det, .2, 12); low = Math.max(2.4, (sh - rise * sw) / n);
+      const residuals = hs.map((h, i) => Math.abs(h - low - rise * weights[i]));
+      const cutoff = Math.max(.12, pct(residuals, .85)); keep = keep.filter((i) => residuals[i] <= cutoff);
+      if (keep.length < 6) break;
+    }
+    const e = median(hs.map((h, i) => Math.abs(h - low - rise * weights[i])));
+    if (e < err - .03) { err = e; best = { eave: low, ridge: low + rise, roof: name }; }
   }
-  return { eave, ridge, roof: best };
+  return best;
 }
 
 /* ------------------------------------------------------------------ trees and shrubs */
@@ -964,7 +1010,8 @@ export function buildYard(site, targetId) {
     if (b1 <= hs0 + .3) left = Math.max(left, (b1 + hs0) / 2);
     if (b0 >= hs1 - .3) right = Math.min(right, (b0 + hs1) / 2);
   }
-  const cols = clamp(Math.floor((right - left) / CELL_M), 4, 34);
+  const cols = Math.min(Math.floor((right - left) / CELL_M), 34);
+  if (cols < 4) throw new SurveyError("narrow-yard", "The estimated lawn is too narrow for a display. Check the selected house or use a typical lawn.");
   const rows = clamp(Math.floor(yardDepth / CELL_M), 0, MAX_ROWS);
   if (rows < SETBACK_ROWS + 1) throw new SurveyError("no-yard", "This house sits too close to the sidewalk for a front-yard display.");
   const gs0 = (left + right) / 2 - cols * CELL_M / 2;

@@ -217,8 +217,9 @@
     x.beginPath(); x.arc(px, py, 3.5, 0, Math.PI * 2); x.fillStyle = "#2f3130"; x.fill();
   };
   const describeMatch = () => {
-    const { site } = S.survey, el = $("#bSurveyMatch"), num = site.geo.number;
-    if (site.geo.matchedBy === "osm") { el.className = "status ok"; el.innerHTML = `${icon("check")}<span>OpenStreetMap has number ${esc(num)} on this house, so the pin should be right.</span>`; }
+    const { site, yard } = S.survey, el = $("#bSurveyMatch"), num = site.geo.number;
+    if (yard.targetId !== site.geo.matchedTargetId) { el.className = "status info"; el.innerHTML = `${icon("info")}<span>You selected this house. Check its roof and driveway against the aerial photo.</span>`; }
+    else if (site.geo.matchedBy === "osm") { el.className = "status ok"; el.innerHTML = `${icon("check")}<span>OpenStreetMap has number ${esc(num)} on this house, so the pin should be right.</span>`; }
     else { el.className = "status warn"; el.innerHTML = `${icon("info")}<span>Public records give the block, not the exact house, so this pin is our best guess for number ${esc(num)}. Check it against the aerial photo.</span>`; }
   };
   const describeYard = () => {
