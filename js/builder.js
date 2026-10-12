@@ -38,7 +38,9 @@
     survey: null,                  /* { site, yard } once an address is modelled */
     planted: [],                   /* squares just filled, for the plant animation */
   };
-  const surveyed = () => S.mode === "address" && S.survey;
+  const addressKey = (s) => s.replace(/\s+/g, " ").trim().toUpperCase();
+  const surveyIsCurrent = () => S.survey && S.survey.inputAddress === addressKey($("#bAddr").value);
+  const surveyed = () => S.mode === "address" && surveyIsCurrent() && S.survey;
   const key = (c, r) => `${c},${r}`;
   const blockedReason = (c, r) => {
     if (surveyed()) { const y = S.survey.yard; return YARD_BLOCK[y.types[r * y.cols + c]] || ""; }
@@ -65,11 +67,12 @@
   };
   const next1 = $("#bNext1");
   const syncNext = () => {
-    const ready = S.mode === "typical" || (S.survey && !S.surveyError);
+    const ready = S.mode === "typical" || (surveyIsCurrent() && !S.surveyError);
     next1.disabled = !ready;
     next1.firstChild.textContent = S.mode === "address" ? "Next: decorate this yard " : "Next: decorate ";
   };
   const setMode = (mode) => {
+    if (S.mode !== mode && requestedAddress && !S.survey) invalidateSurvey();
     if (S.mode !== mode && S.touched) { S.cells.clear(); S.history = []; S.touched = false; }
     S.mode = mode;
     $$("[data-bmode]", root).forEach((el) => (el.hidden = el.dataset.bmode !== mode));
@@ -83,7 +86,8 @@
   describeSize();
 
   /* ---------------- stage 1, address: survey the yard ---------------- */
-  let surveyMod = null, preview = null, surveyRun = 0;
+  let surveyMod = null, preview = null, surveyRun = 0, requestedAddress = "";
+  let previewJob = Promise.resolve();
   const steps = $("#bSurveySteps"), surveyLive = $("#bSurveyLive"), addrErr = $("#bAddrErr"), addrInput = $("#bAddr");
   const STEP_SAY = { address: "Found the address.", streets: "Street map read.", lidar: "Laser survey downloaded.", photo: "Aerial photo in.", model: "Model built." };
   const setStep = (step, state, note, frac) => {
@@ -102,24 +106,40 @@
   };
   addrErr.addEventListener("click", (e) => { if (e.target.closest("[data-use-typical]")) { const r = $('input[name="bMode"][value="typical"]', root); r.checked = true; setMode("typical"); r.focus(); } });
 
+  const invalidateSurvey = () => {
+    ++surveyRun; requestedAddress = "";
+    S.survey = null; S.surveyError = null; S.cells.clear(); S.touched = false; S.history = [];
+    if (preview) { preview.dispose(); preview = null; }
+    $("#bSurvey").hidden = true; $("#yardMarker").hidden = true;
+    $("#yardPreviewStage").classList.remove("no-3d");
+    steps.hidden = true; surveyLive.textContent = "";
+    const go = $("#bAddrGo"); go.disabled = false; go.removeAttribute("aria-busy");
+    syncNext();
+  };
+  const onAddressEdit = () => {
+    if (addressKey(addrInput.value) === requestedAddress) return;
+    invalidateSurvey(); showErr("");
+  };
+  addrInput.addEventListener("input", onAddressEdit);
+  addrInput.addEventListener("change", onAddressEdit);
+
   $("#bAddrForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const address = addrInput.value.replace(/\s+/g, " ").trim();
+    invalidateSurvey();
     if (!/^\d+\s+\S+/.test(address)) { showErr("Start with the house number, then the street and city."); addrInput.focus(); return; }
     showErr("");
     const run = ++surveyRun;
+    requestedAddress = addressKey(address);
     const go = $("#bAddrGo");
     go.disabled = true; go.setAttribute("aria-busy", "true");
     steps.hidden = false;
     $$("li", steps).forEach((li) => { li.dataset.state = "wait"; li.querySelector(".sv-disc").innerHTML = ""; li.querySelector(".sv-note").textContent = ""; });
-    $("#bSurvey").hidden = true;
-    S.survey = null; S.surveyError = null; S.cells.clear(); S.touched = false; S.history = [];
-    syncNext();
-    if (preview) { preview.dispose(); preview = null; }
     surveyLive.textContent = "Modelling their yard. This takes about half a minute.";
-    const slow = setTimeout(() => { const li = $('[data-step="photo"]', steps); if (li.dataset.state === "active") li.querySelector(".sv-note").textContent = "USGS can take 30 seconds"; }, 7000);
+    const slow = setTimeout(() => { if (run !== surveyRun) return; const li = $('[data-step="photo"]', steps); if (li.dataset.state === "active") li.querySelector(".sv-note").textContent = "USGS can take 30 seconds"; }, 7000);
     try {
       surveyMod = surveyMod || await import("./yard-survey.js");
+      if (run !== surveyRun) return;
       const NOTES = { photo: "Unavailable; lawn edges come from the laser survey", streets: "Unavailable; the house faces the address point" };
       const { site, yard } = await surveyMod.survey(address, surveyMod.browserEnv(), (step, state, note, frac) => {
         if (run !== surveyRun) return;
@@ -127,7 +147,7 @@
         setStep(step, state, state === "fail" ? NOTES[step] || "" : note === undefined && state === "done" ? "" : note, frac);
       });
       if (run !== surveyRun) return;
-      S.survey = { site, yard };
+      S.survey = { site, yard, inputAddress: addressKey(address) };
       await showSurvey(true);
     } catch (err) {
       if (run !== surveyRun) return;
@@ -152,22 +172,35 @@
     return site.houses.map((id) => site.buildings.find((b) => b.id === id)).filter((b) => z(b) < yard.road.curbZ - 1).sort((a, b) => x(a) - x(b));
   };
   const showSurvey = async (fresh, quiet = false) => {
-    const { site, yard } = S.survey;
+    const survey = S.survey, run = surveyRun;
+    if (!survey || !surveyIsCurrent()) return;
+    const { site, yard } = survey;
+    const isCurrent = () => run === surveyRun && S.survey === survey && S.mode === "address" && S.stage === 1 && surveyIsCurrent();
     const box = $("#bSurvey");
     box.hidden = false;
     $("#bSurveyAddr").textContent = titleCase(yard.address.replace(/, (\d{5})$/, " $1"));
     describeYard(); describeMatch(); drawAerial();
     if (fresh) {
+      $("#bPrevHouse").disabled = true; $("#bNextHouse").disabled = true;
       const canvas = $("#yardPreview");
       try {
         const mod = await import("./render3d.js");
-        preview = await mod.createLawnRender(canvas, { cols: yard.cols, rows: yard.rows, cellM: yard.cellM, setbackRows: yard.setbackRows, pieces: [], survey: S.survey }, {
-          reduceMotion: reduceMotion(), view: "survey", reveal: !quiet, marker: $("#yardMarker"),
-          onPickHouse: (id) => { if (site.houses.includes(id)) pickHouse(id); },
+        // Serialize canvas ownership so an older asynchronous renderer cannot repaint a newer yard.
+        previewJob = previewJob.catch(() => {}).then(async () => {
+          if (!isCurrent()) return;
+          const candidate = await mod.createLawnRender(canvas, { cols: yard.cols, rows: yard.rows, cellM: yard.cellM, setbackRows: yard.setbackRows, pieces: [], survey }, {
+            reduceMotion: reduceMotion(), view: "survey", reveal: !quiet, marker: $("#yardMarker"),
+            onPickHouse: (id) => { if (isCurrent() && site.houses.includes(id)) pickHouse(id); },
+          });
+          if (!isCurrent()) { candidate.dispose(); return; }
+          preview = candidate;
+          preview.setTime("day", true); preview.setView("survey", true);
+          $("#yardMarker").hidden = false;
         });
-        preview.setTime("day", true); preview.setView("survey", true);
-        $("#yardMarker").hidden = false;
+        await previewJob;
+        if (!isCurrent()) return;
       } catch (err) {
+        if (!isCurrent()) return;
         console.error("3D preview failed:", err);
         $("#yardPreviewStage").classList.add("no-3d");
       }
@@ -562,7 +595,7 @@
 
   /* ---------------- stages ---------------- */
   const goStage = (n) => {
-    if (n === 2 && S.mode === "address" && !(S.survey && !S.surveyError)) { addrInput.focus(); showErr(S.surveyError || "Model their yard first: type the address and press Model their yard."); return; }
+    if (n === 2 && S.mode === "address" && !(surveyIsCurrent() && !S.surveyError)) { addrInput.focus(); showErr(S.surveyError || "Model their yard first: type the address and press Model their yard."); return; }
     S.stage = n;
     $$("[data-bstage]", root).forEach((s) => (s.hidden = s.dataset.bstage !== String(n)));
     $$("#bSteps li", root).forEach((li, i) => {

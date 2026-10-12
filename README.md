@@ -53,6 +53,8 @@ Then it fits houses as rectangles with gable or hip roofs, snaps driveways, walk
 
 Address selection compares house footprints and street frontage, uses Census side-of-street evidence, and treats an OpenStreetMap number as confirmation only when it lies on a plausible footprint. Duplicate nearby numbers remain unconfirmed. Ambiguous Census results and changed house numbers are rejected. Manually picking another house clears the original match claim. Roof slopes are fitted robustly so chimneys and branches do not inflate the roof; street snapping cannot substantially enlarge the footprint. Missing ground returns fail clearly, and narrow lawns cannot expand beyond their estimated boundaries.
 
+Editing the address clears the previous map and requires a fresh lookup before decorating. Results are tied to the submitted address; older lookups and delayed 3D previews cannot restore a previous location. Preview creation is serialized to prevent two asynchronous renders from competing for the same canvas.
+
 The 3D renderer uses physical materials, procedural surface/bump textures, instanced grass and foliage, window trim and foundations, soft shadow maps and ACES tone mapping. Morning reflections use the locally shipped [Spruit Sunrise HDRI](https://polyhaven.com/a/spruit_sunrise) by Greg Zaal (CC0); night uses moon, porch and street lighting. Stationary scenes stop redrawing. Building geometry comes from survey data; finishes and window placement are illustrative, and lot edges are estimates. House numbers are not drawn on the model.
 
 **Checking the house:** public records only give the block, so unless OpenStreetMap has that exact house number (then the pin is marked as matched), the house check says the pin is a best guess and shows the USGS aerial photo turned to match the model, with the picked house outlined. One to the left/right or tapping a house fixes a wrong pick.
@@ -122,6 +124,8 @@ tools/build_artifact.py    builds dist/ for publishing
 tools/yard-survey.test.mjs address selection, roof/footprint fitting, ground and setback regression checks
 tools/check-render.cjs     browser smoke check (requires a local Playwright package and server on port 8080)
 tools/check-address.cjs    live public-service survey and render check for a supplied address
+tools/check-address-change.cjs consecutive addresses through the live lookup UI; checks distinct aerial photos
+tools/address-state.test.cjs browser regression checks for edited addresses and stale asynchronous results
 assets/environments/       locally shipped 1K sunrise HDR and license/provenance
 ```
 
