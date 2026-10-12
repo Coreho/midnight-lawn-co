@@ -57,6 +57,12 @@ Google data is deliberately not used to build the model: Google's terms forbid d
 
 Test harness (not shipped): the survey module runs under Node with the network and decoders injected, so it can be checked against real addresses.
 
+## Live site
+
+**https://coreho.github.io/midnight-lawn-co/** (GitHub Pages, repo `Coreho/midnight-lawn-co`, served from `main`). Push to `main` and Pages redeploys in about a minute.
+
+The claude.ai artifact copy is a preview only: its sandbox blocks every outside request, so "Their real yard" can't reach the Census, USGS or OpenStreetMap there. Its error message links to the live site.
+
 ## Run it
 
 Serve the folder over HTTP. The 3D view is an ES module, and browsers block modules on `file://` pages:
