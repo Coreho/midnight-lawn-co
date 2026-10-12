@@ -1,0 +1,22 @@
+/* Shared styles for the social banners. Values mirror the site's tokens (css/site.css). */
+:root {
+  --ground: #82cc5c; --ink: #2f3130; --white: #ffffff; --cream: #f2efe3;
+  --tomato: #f0574c; --cobalt: #1b8ff5; --yellow: #f5d42b;
+  --font: "Host Grotesk", "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; margin: 0; }
+html, body { width: var(--w); height: var(--h); overflow: hidden; }
+body { background: var(--ground); color: var(--ink); font-family: var(--font); position: relative; }
+.capsule { display: inline-flex; align-items: center; gap: 10px; padding: 10px 18px 10px 10px; border-radius: 999px; background: var(--white); font: 600 var(--logo)/1 var(--font); }
+.capsule svg { width: calc(var(--logo) * 1.5); height: calc(var(--logo) * 1.5); }
+h1 { font: 600 var(--hook)/.95 var(--font); letter-spacing: -.02em; }
+.sub { font-size: var(--sub); line-height: 1.35; }
+.yard { display: flex; flex-wrap: wrap; column-gap: calc(var(--ltr) * .45); row-gap: calc(var(--ltr) * .2); }
+.word { display: inline-flex; gap: .05em; padding-bottom: calc(var(--ltr) * .3); }
+.ltr { position: relative; font: 800 var(--ltr)/1 var(--font); color: var(--fill, var(--tomato)); -webkit-text-stroke: .1em var(--white); paint-order: stroke fill; filter: drop-shadow(0 .05em .04em rgba(47, 49, 48, .28)); }
+.word .ltr:nth-child(4n+2) { --fill: var(--cobalt); }
+.word .ltr:nth-child(4n+3) { --fill: var(--yellow); }
+.word .ltr:nth-child(4n) { --fill: var(--white); -webkit-text-stroke-color: var(--ink); -webkit-text-stroke-width: .045em; }
+.ltr::after { content: ""; position: absolute; left: 50%; top: 80%; width: 3px; height: calc(var(--ltr) * .4); margin-left: -1.5px; background: rgba(47, 49, 48, .55); border-radius: 2px; z-index: -1; }
+.name { flex-basis: 100%; }
+.name .ltr { font-size: calc(var(--ltr) * 1.3); }

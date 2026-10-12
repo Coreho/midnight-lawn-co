@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Midnight Lawn Co. Facebook cover (820x312)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="banner.css">
+<style>
+  /* Facebook crops the sides on phones and the profile photo covers the bottom-left on desktop,
+     so the message sits center-left above that corner and the cast stays inside the central 640px. */
+  :root { --w: 820px; --h: 312px; --hook: 36px; --sub: 15px; --ltr: 24px; }
+  .copy { position: absolute; left: 110px; top: 34px; width: 380px; display: grid; gap: 12px; }
+  .lawn { position: absolute; left: 110px; top: 160px; width: 400px; }
+  .cast { position: absolute; right: 96px; bottom: 0; height: 290px; }
+</style>
+</head>
+<body>
+  <div class="copy">
+    <h1>Wake up to their name on the lawn.</h1>
+    <p class="sub">Overnight yard greetings in Wayne County. Book by 6 PM the night before.</p>
+  </div>
+  <div class="lawn yard">
+    <span class="word"><span class="ltr">H</span><span class="ltr">A</span><span class="ltr">P</span><span class="ltr">P</span><span class="ltr">Y</span></span>
+    <span class="word"><span class="ltr">B</span><span class="ltr">I</span><span class="ltr">R</span><span class="ltr">T</span><span class="ltr">H</span><span class="ltr">D</span><span class="ltr">A</span><span class="ltr">Y</span></span>
+    <span class="word name"><span class="ltr">M</span><span class="ltr">A</span><span class="ltr">Y</span><span class="ltr">A</span></span>
+  </div>
+  <img class="cast" src="../img/cast.png" alt="">
+</body>
+</html>
