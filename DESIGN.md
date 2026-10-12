@@ -168,7 +168,7 @@ components:
 
 The page is one saturated, finely grained lawn-green field, and everything else is a thing planted on it: a floating white capsule nav, white pills, cream and white slabs that rise over each other on 48px top corners, and chunky yard letters staked into the grass. It is daytime, cheerful and tactile, the feeling of walking out the front door to find a name on the lawn. Composition is flush-left and never centred; density is generous, with big type and big touch targets.
 
-One grotesque does everything. Colour is disciplined: green is the ground and the "go" signal, ink and white carry all reading, and the three toy-bright accents live only where an object would be painted (discs, the letters themselves, die-cut art). The Lawn Builder carries the same world into an aerial street map and a toon-shaded 3D render, so a customer's design looks like the site at every scale.
+One grotesque does everything. Colour is disciplined: green is the ground and the "go" signal, ink and white carry all reading, and the three toy-bright accents live only where an object would be painted (discs, the letters themselves, die-cut art). The Lawn Builder uses the brand world for its controls and aerial grid. Its 3D scene uses natural materials and physical lighting to make the address-based model easier to understand; the signs retain their catalog colors.
 
 It explicitly rejects the earlier night marquee look (navy, condensed display type, lit panels) and the generic party-rental page (balloon clip-art on white, photo grids, three equal price cards).
 
@@ -190,7 +190,7 @@ A grass field, ink and paper for reading, and three toy-bright accents kept to p
 
 ### Secondary
 - **Tomato** (`tomato`): yard-letter fill (first of every four), a few icon wells, die-cut art. Text needing red uses **Brick** (`tomato-ink`) instead: errors (`--bad`), required marks, "short" stock, the active eraser tool, peak-season cells and the input caret.
-- **Cobalt** (`cobalt`): yard-letter fill (second of every four), icon wells, the 3D front door. **Deep Cobalt** (`cobalt-ink`) is its ink-safe partner for text.
+- **Cobalt** (`cobalt`): yard-letter fill (second of every four), icon wells. **Deep Cobalt** (`cobalt-ink`) is its ink-safe partner for text. The illustrative 3D front door uses a subdued teal.
 
 ### Tertiary
 - **Sign Yellow** (`yellow`): yard-letter fill (third of every four), the price discs and running totals, the featured-package disc, the selected FAQ disc, current-step disc, text selection, and the dashed road lanes. **Amber Ink** (`amber-ink`) carries warning text (`--warn`).
@@ -305,6 +305,7 @@ The product, drawn in type. `.panel` holds `.word` groups of `.ltr` letters in C
 - **Catalog:** a white card with the running total (price disc), cream theme tabs (ink when selected), cream tiles (white with ink ring when pressed), the word maker, message presets and ringed tool pills (the active eraser goes brick). Sticky at 96px on desktop; under 900px it docks to the bottom as a tray with sideways-scrolling tiles and icon-only tools.
 - **Summary bar (`.b-bar`):** a white card with total, night picker, notes and actions.
 - **3D stage:** an ink-backed 16:9 canvas (4:3 on phones) with a white illustration chip top-left and white segment controls (selected segment ink) for time of day and camera; a strip of white photo cards below.
+- **3D materials and light:** `MeshStandardMaterial`, ACES filmic tone mapping, sRGB output, local procedural grain/bump maps for grass, siding, shingles, bark and paving. A locally shipped 1K CC0 sunrise HDR supplies morning reflections; cool moonlight and warm porch/street lights supply night lighting. Instanced short grass and alpha-cut leaf clusters add detail with bounded geometry. Window frames and foundations follow the measured building; finishes and window placement remain illustrative. No house-number plaque. Static scenes render only when state changes; shadow maps update for lighting, planting and canopy changes.
 
 ### Motion
 GSAP. Hero letters drop from -120px with `back.out(1.7)`, staggered 0.05s; typed letters drop with `back.out(1.8)`; stock counts tick with `back.out(2)`. Builder pieces "plant" (from y -18, scale 1.25, `back.out(2)`). Stage and step changes fade up 14px on `expo.out`; prices pop from 1.3 scale. The green slab lobe is scrubbed by ScrollTrigger. 3D camera and light changes tween 0.9s `power2.inOut`. CSS easing tokens: `--ease-out` `cubic-bezier(.16, 1, .3, 1)`, `--ease-over` `cubic-bezier(.34, 1.56, .64, 1)`. `prefers-reduced-motion: reduce` disables all of it.
@@ -318,7 +319,7 @@ GSAP. Hero letters drop from -120px with `back.out(1.7)`, staggered 0.05s; typed
 - **Do** keep tomato, cobalt and yellow to discs, yard letters, icon wells and die-cut art; use `tomato-ink`, `cobalt-ink` and `amber-ink` for any coloured text.
 - **Do** set everything in Host Grotesk: 400 body, 500 nav, 600 headings and UI, 800 yard letters.
 - **Do** keep text flush-left.
-- **Do** render the 3D scene from the site palette (lawn, ink, cream, white and the three accents) with `MeshToonMaterial` on the three-band ramp, so it reads like the flat vector art.
+- **Do** retain the catalog's painted sign colors and the existing builder interface while using natural, textured physical materials for the 3D surroundings. Preserve survey-derived terrain, footprints, roof shapes, and tree positions.
 - **Do** gate every GSAP tween on `prefers-reduced-motion`.
 
 ### Don't:
@@ -326,7 +327,7 @@ GSAP. Hero letters drop from -120px with `back.out(1.7)`, staggered 0.05s; typed
 - **Don't** float an object off the lawn: yard letters stand on stakes in the grass, art pieces sit on lawn cells, and the hero letters meet the turf edge.
 - **Don't** add a dark mode or a dark UI theme; the interface is one committed daytime look (`color-scheme: light`). The 3D render's night lighting is a scene state showing the product's overnight setting, not a UI theme.
 - **Don't** put the company name or logo on the yard display itself; the brand lives on the door card.
-- **Don't** use photoreal or smooth-shaded materials, or new saturated hues, in the 3D scene; built surfaces come from the site palette plus the paving neutrals already on the aerial map.
+- **Don't** replace a surveyed house with a generated generic model, or imply illustrative finishes and estimated lot boundaries are measured facts. Avoid cinematic effects that obscure the lawn or signs.
 - **Don't** use pure black; ink is `#2f3130`.
 - **Don't** add uppercase tracked labels, monospace text or a second typeface.
 - **Don't** centre-align body copy or section heads.

@@ -3,29 +3,30 @@
    - a typical lawn built from the shape and size the buyer picked, and
    - a surveyed yard: the real ground, houses, roofs, trees and street around an address,
      modelled from public lidar and aerial data by js/yard-survey.js.
-   Every placed piece stands up as a die-cut yard sign on wire stakes. Flat toon shading in the
-   site palette, two lighting rigs (morning, 2 AM) and five camera angles framed on the display.
+   Every placed piece stands up as a die-cut yard sign on wire stakes. Textured physical
+   materials, two lighting rigs (morning, 2 AM) and five camera angles framed on the display.
    With `opts.edit` the surveyed yard is also the decorating surface: a grid of 2.5-ft squares
    draped over the real lawn, tap to place, drag a piece to move it. */
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
+import { RGBELoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/RGBELoader.js";
 import { demSample, SURF, CELL } from "./yard-survey.js";
 
-/* the site palette: lawn, ink, cream, white, the three accents, and the paving neutrals */
+/* Natural scene materials; the signs themselves retain the catalog's brand colors. */
 const COLORS = {
-  grass: 0x6dbb47, lawn: 0x82cc5c, lawn2: 0x94d671, walk: 0xe8e4d6, curb: 0xcfcabb, road: 0x2f3130, dash: 0xf5d42b, drive: 0xd8d2bf,
-  wall: 0xf2efe3, trim: 0xffffff, roof: 0x2f3130, door: 0x1b8ff5, glass: 0x2f3130, trunk: 0x9a6233, leaves: 0x4f9a2e, leaves2: 0x6dbb47,
-  pole: 0x2f3130, chimney: 0xf0574c, nWall: 0xe8e4d6, nRoof: 0xbdb8a8, joint: 0xcfcabb, curbTop: 0xbdb8a8,
+  grass: 0x566c35, lawn: 0x627d3c, lawn2: 0x6b8443, walk: 0xc3c0b5, curb: 0xb2b0a7, road: 0x414449, dash: 0xe1c16a, drive: 0xb8b6aa,
+  wall: 0xd8d2bc, trim: 0xf1efe6, roof: 0x494842, door: 0x34565b, glass: 0x52717e, trunk: 0x63503b, leaves: 0x354f26, leaves2: 0x53682f,
+  pole: 0x43474a, chimney: 0x976954, nWall: 0xc2bbb0, nRoof: 0x62605a, joint: 0x99988f, curbTop: 0xa9a89f,
 };
 const HEX = (n) => "#" + n.toString(16).padStart(6, "0");
 /* intensities are physical (r155+ lights): a sun of about pi lights a face at its full colour */
 const TIMES = {
-  day: { sky: 0xcfe8ff, fog: [0xcfe8ff, 50, 170], hemi: [0xffffff, 0x82cc5c, 1.35], sun: [0xfff6e5, 2.1], porch: 0, spot: 0, window: 0, stars: 0 },
-  night: { sky: 0x17214a, fog: [0x17214a, 34, 140], hemi: [0x6d7fc4, 0x1d3a1a, .7], sun: [0xb9c6ff, .55], porch: 5, spot: 150, window: 1, stars: 1 },
+  day: { sky: 0xb5cedd, fog: [0xd6dfde, 45, 150], hemi: [0xd6e8ff, 0x737056, 2], sun: [0xffead1, 3.2], porch: 0, spot: 0, window: 0, stars: 0 },
+  night: { sky: 0x10192b, fog: [0x152030, 32, 120], hemi: [0x9fb8e0, 0x303a27, .55], sun: [0xb8d0ef, .65], porch: 12, spot: 210, window: 1, stars: 1 },
 };
 const VIEW_ORDER = ["street", "close", "drive", "next", "above"];
 
 /* ---------------- textures: die-cut yard signs with a white edge ---------------- */
-const SIZE = 256;
+const SIZE = 512;
 /* SVG as an image is strict XML: keep the first of any repeated attribute, as inline HTML does */
 const dedupeAttrs = (svg) => svg.replace(/<([a-zA-Z][\w:-]*)((?:\s+[\w:-]+="[^"]*")+)(\s*\/?)>/g, (m, tag, attrs, end) => {
   const seen = new Map();
@@ -70,16 +71,113 @@ const artTexture = async (svg) => {
   return cutout((x) => { if (img) x.drawImage(img, SIZE * .06, SIZE * .06, SIZE * .88, SIZE * .88); else { x.fillStyle = "#ffffff"; x.beginPath(); x.roundRect(SIZE * .14, SIZE * .14, SIZE * .72, SIZE * .72, 24); x.fill(); } });
 };
 
-/* three flat bands of light, so everything reads like the site's cut-paper art */
-const toonRamp = () => {
-  const t = new THREE.DataTexture(new Uint8Array([115, 115, 115, 255, 190, 190, 190, 255, 255, 255, 255, 255]), 3, 1, THREE.RGBAFormat);
-  t.minFilter = t.magFilter = THREE.NearestFilter; t.generateMipmaps = false; t.needsUpdate = true;
-  return t;
-};
 const canvasTex = (w, h, draw, srgb = true) => {
   const c = document.createElement("canvas"); c.width = w; c.height = h; draw(c.getContext("2d"), w, h);
   const t = new THREE.CanvasTexture(c); if (srgb) t.colorSpace = THREE.SRGBColorSpace; return t;
 };
+
+/* Repeatable, local surface maps: no external texture requests or per-frame canvas work. */
+const randomSource = (seed = 73) => () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+function surfaceMaps(disposables) {
+  const maps = new Map();
+  const get = (kind) => {
+    if (maps.has(kind)) return maps.get(kind);
+    const rand = randomSource(91 + kind.length);
+    const texture = canvasTex(512, 512, (x, w, h) => {
+      x.fillStyle = "#dededb"; x.fillRect(0, 0, w, h);
+      const image = x.getImageData(0, 0, w, h);
+      for (let i = 0; i < image.data.length; i += 4) {
+        const v = 205 + Math.floor(rand() * 45);
+        image.data[i] = image.data[i + 1] = image.data[i + 2] = v;
+      }
+      x.putImageData(image, 0, 0);
+      if (kind === "grass") {
+        for (let i = 0; i < 14000; i++) {
+          const a = rand() * w, b = rand() * h;
+          x.strokeStyle = rand() > .5 ? "rgba(65,74,45,.22)" : "rgba(255,255,220,.3)";
+          x.lineWidth = .7; x.beginPath(); x.moveTo(a, b); x.lineTo(a + rand() * 3 - 1.5, b - 2 - rand() * 6); x.stroke();
+        }
+      }
+      if (kind === "siding" || kind === "roof") {
+        const step = kind === "siding" ? 32 : 64;
+        for (let y = 0; y < h; y += step) {
+          x.fillStyle = "rgba(40,40,40,.28)"; x.fillRect(0, y, w, 2);
+          x.fillStyle = "rgba(255,255,255,.65)"; x.fillRect(0, y + 2, w, 2);
+          if (kind === "roof") {
+            for (let a = (y / step % 2) * 64; a < w; a += 128) { x.fillStyle = "rgba(45,45,45,.22)"; x.fillRect(a, y, 2, step); }
+          }
+        }
+      }
+      if (kind === "bark") {
+        for (let i = 0; i < 90; i++) { x.fillStyle = "rgba(35,30,25,.23)"; x.fillRect(rand() * w, rand() * h, 1 + rand() * 4, 20 + rand() * 150); }
+      }
+    });
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping; texture.anisotropy = 8;
+    const bump = texture.clone(); bump.colorSpace = THREE.NoColorSpace; bump.needsUpdate = true;
+    disposables.push(texture, bump); const pair = { map: texture, bumpMap: bump, bumpScale: kind === "grass" ? .018 : .012 };
+    maps.set(kind, pair); return pair;
+  };
+  const forColor = (color) => {
+    if ([COLORS.grass, COLORS.lawn, COLORS.lawn2].includes(color)) return get("grass");
+    if ([COLORS.wall, COLORS.nWall].includes(color)) return get("siding");
+    if ([COLORS.roof, COLORS.nRoof].includes(color)) return get("roof");
+    if (color === COLORS.trunk) return get("bark");
+    if ([COLORS.walk, COLORS.drive, COLORS.curb, COLORS.road].includes(color)) return get("mineral");
+    return {};
+  };
+  return { get, forColor };
+}
+
+/* Many small leaf clusters give a porous silhouette instead of a smooth ball canopy.
+   One instanced draw per crown, shared geometry/texture; crown opacity still works in the editor. */
+function vegetation({ mat, disposables }) {
+  const leafMap = canvasTex(128, 128, (x) => {
+    const rand = randomSource(9); x.clearRect(0, 0, 128, 128);
+    for (let i = 0; i < 17; i++) {
+      const v = 180 + Math.floor(rand() * 75); x.fillStyle = `rgb(${v},${v},${v})`;
+      x.beginPath(); x.ellipse(15 + rand() * 98, 15 + rand() * 98, 5 + rand() * 6, 2 + rand() * 3, rand() * Math.PI, 0, Math.PI * 2); x.fill();
+    }
+  });
+  const geo = new THREE.PlaneGeometry(1, 1); disposables.push(leafMap, geo);
+  return (r, height, seed, count = 1000) => {
+    const material = mat(0xffffff, { map: leafMap, alphaTest: .45, side: THREE.DoubleSide, roughness: .95 });
+    const mesh = new THREE.InstancedMesh(geo, material, count);
+    const rand = randomSource(seed), dummy = new THREE.Object3D(), color = new THREE.Color();
+    for (let i = 0; i < count; i++) {
+      const theta = rand() * Math.PI * 2, v = rand() * 2 - 1, radius = Math.cbrt(rand());
+      const horizontal = Math.sqrt(1 - v * v) * radius;
+      dummy.position.set(Math.cos(theta) * horizontal * r, v * radius * height / 2, Math.sin(theta) * horizontal * r);
+      dummy.rotation.set(rand() * Math.PI, rand() * Math.PI * 2, rand() * Math.PI);
+      dummy.scale.setScalar(r * (.24 + rand() * .22)); dummy.updateMatrix(); mesh.setMatrixAt(i, dummy.matrix);
+      color.setHSL(.23 + rand() * .055, .27 + rand() * .2, .17 + rand() * .14); mesh.setColorAt(i, color);
+    }
+    mesh.instanceMatrix.needsUpdate = true; mesh.instanceColor.needsUpdate = true;
+    mesh.castShadow = mesh.receiveShadow = true; mesh.computeBoundingSphere(); disposables.push(mesh);
+    return mesh;
+  };
+}
+
+function plantGrass(ctx, m, groundAt) {
+  const { W, Dp, cell, mat, scene, disposables } = ctx;
+  const count = Math.min(18000, Math.ceil(W * Dp * 160));
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute([-.012, 0, 0, .012, 0, 0, .006, .065, -.008, -.006, .065, -.008, .025, .12, -.025], 3));
+  geo.setIndex([0, 1, 2, 0, 2, 3, 3, 2, 4]); geo.computeVertexNormals();
+  const material = mat(0xffffff, { side: THREE.DoubleSide, roughness: 1 });
+  const grass = new THREE.InstancedMesh(geo, material, count), dummy = new THREE.Object3D(), color = new THREE.Color(), rand = randomSource(482);
+  let used = 0;
+  for (let i = 0; i < count; i++) {
+    const x = (rand() - .5) * W, z = (rand() - .5) * Dp, c = Math.floor((x + W / 2) / cell), r = Math.floor((z + Dp / 2) / cell);
+    const type = m.survey ? m.survey.yard.types[r * m.cols + c] : CELL.ok;
+    if (type !== CELL.ok && type !== CELL.setback) continue;
+    if (!m.survey && m.shape === "corner" && c < m.cols - m.cornerSideCols && r < m.cornerHouseRows) continue;
+    dummy.position.set(x, groundAt(x, z) + .006, z); dummy.rotation.y = rand() * Math.PI * 2;
+    dummy.scale.set(.5 + rand() * .5, .18 + rand() * .22, 1); dummy.updateMatrix(); grass.setMatrixAt(used, dummy.matrix);
+    color.setHSL(.23 + rand() * .055, .4 + rand() * .2, .13 + rand() * .1); grass.setColorAt(used++, color);
+  }
+  grass.count = used; grass.instanceMatrix.needsUpdate = true; if (grass.instanceColor) grass.instanceColor.needsUpdate = true;
+  grass.receiveShadow = true; grass.computeBoundingSphere(); scene.add(grass); disposables.push(geo, grass);
+}
 
 /* ---------------- scene ---------------- */
 export async function createLawnRender(canvas, m, opts = {}) {
@@ -90,15 +188,36 @@ export async function createLawnRender(canvas, m, opts = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, context: gl, antialias: true, preserveDrawingBuffer: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.NoToneMapping;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
 
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(38, 16 / 9, .1, 400);
   const disposables = [];
-  const ramp = toonRamp(); disposables.push(ramp);
-  const mat = (color, extra = {}) => { const mm = new THREE.MeshToonMaterial({ color, gradientMap: ramp, ...extra }); disposables.push(mm); return mm; };
+  const surfaces = surfaceMaps(disposables);
+  const mat = (color, extra = {}) => {
+    const glass = color === COLORS.glass;
+    const mm = new THREE.MeshStandardMaterial({ color, roughness: glass ? .16 : .9, metalness: glass ? .25 : 0, envMapIntensity: .25, ...surfaces.forColor(color), ...extra });
+    disposables.push(mm); return mm;
+  };
+  const surfaceMat = (color, w, h) => {
+    const mm = mat(color);
+    for (const key of ["map", "bumpMap"]) if (mm[key]) {
+      const t = mm[key].clone(); t.repeat.set(w / 2, h / 2); t.needsUpdate = true; disposables.push(t); mm[key] = t;
+    }
+    return mm;
+  };
+  // Pre-filtered sunrise reflections, locally shipped. Missing HDR never blocks the yard.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  let dayEnvironment = null;
+  try {
+    const hdr = await new RGBELoader().loadAsync(new URL("../assets/environments/spruit_sunrise_1k.hdr", import.meta.url).href);
+    dayEnvironment = pmrem.fromEquirectangular(hdr); hdr.dispose(); disposables.push(dayEnvironment);
+  } catch { /* hemisphere and sun remain the complete lighting fallback */ }
+  pmrem.dispose();
   const add = (geo, material, { x = 0, y = 0, z = 0, cast = false, receive = true, ry = 0, parent = scene } = {}) => {
     disposables.push(geo);
     const mesh = new THREE.Mesh(geo, material); mesh.position.set(x, y, z); mesh.rotation.y = ry;
@@ -108,9 +227,12 @@ export async function createLawnRender(canvas, m, opts = {}) {
 
   const cell = m.cellM, W = m.cols * cell, Dp = m.rows * cell;
   const X = (c) => (c + .5) * cell - W / 2, Z = (r) => (r + .5) * cell - Dp / 2;
-  const ctx = { scene, mat, add, flat, disposables, cell, W, Dp, X, Z };
+  const ctx = { scene, mat, surfaceMat, surfaces, add, flat, disposables, cell, W, Dp, X, Z };
+  ctx.foliage = vegetation(ctx);
   const world = m.survey ? buildSurveyed(ctx, m, opts) : buildTypical(ctx, m);
   const groundAt = world.groundAt;
+  plantGrass(ctx, m, groundAt);
+  let sceneDirty = true, shadowsDirty = true, animationUntil = 0;
 
   /* sky lights */
   const hemi = new THREE.HemisphereLight(0xffffff, 0x82cc5c, 1); scene.add(hemi);
@@ -120,6 +242,8 @@ export async function createLawnRender(canvas, m, opts = {}) {
   const sh = world.shadowHalf || 22;
   Object.assign(sun.shadow.camera, { left: -sh, right: sh, top: sh, bottom: -sh, near: 1, far: 120 });
   sun.shadow.bias = -.0006;
+  sun.shadow.normalBias = .025;
+  sun.shadow.radius = 3;
   scene.add(sun, sun.target);
   const starGeo = new THREE.BufferGeometry();
   const pts = []; for (let i = 0; i < 500; i++) { const t = Math.random() * Math.PI * 2, p = Math.random() * .45; pts.push(Math.cos(t) * Math.cos(p) * 150, 20 + Math.sin(p) * 120, Math.sin(t) * Math.cos(p) * 150); }
@@ -128,7 +252,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
   disposables.push(starGeo, starMat); scene.add(new THREE.Points(starGeo, starMat));
 
   /* ---------------- the pieces: die-cut signs on wire stakes, facing the street ---------------- */
-  const stakeMat = mat(0x6f7378);   /* wire stakes, toon-shaded like everything else */
+  const stakeMat = mat(0x8a8d89, { metalness: .75, roughness: .35 });
   const stakeGeo = new THREE.CylinderGeometry(.006, .006, .32, 6); disposables.push(stakeGeo);
   const lift = .12;
   const texCache = new Map(), pieceMeshes = new Map();
@@ -140,7 +264,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
   };
   const makePiece = async (p) => {
     const tex = await textureFor(p);
-    const sign = new THREE.MeshToonMaterial({ map: tex, gradientMap: ramp, transparent: true, alphaTest: .5, side: THREE.DoubleSide });
+    const sign = new THREE.MeshStandardMaterial({ map: tex, roughness: .72, envMapIntensity: .25, alphaTest: .5, side: THREE.DoubleSide });
     const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: tex, alphaTest: .5 });
     const size = p.kind === "letter" ? p.h * 1.12 : p.h;
     const geo = new THREE.PlaneGeometry(size, size);
@@ -174,6 +298,8 @@ export async function createLawnRender(canvas, m, opts = {}) {
         const g = await makePiece(p); placeGroup(g, p.c, p.r); scene.add(g); pieceMeshes.set(k, g);
         if (plant.includes(k) && window.gsap && !opts.reduceMotion) window.gsap.from(g.position, { y: g.position.y + .6, duration: .45, ease: "back.out(2)" });
       }
+      sceneDirty = shadowsDirty = true;
+      if (plant.length && !opts.reduceMotion) animationUntil = performance.now() + 600;
     });
     return pieceJob;
   };
@@ -232,6 +358,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
   const applyCam = () => { camera.position.set(camState.px, camState.py, camState.pz); target.set(camState.tx, camState.ty, camState.tz); camera.lookAt(target); };
   let current = opts.view || "street";
   const setView = (name, instant) => {
+    sceneDirty = true;
     current = VIEWS[name] ? name : "street";
     const v = VIEWS[current]();
     tween(camState, { px: v.pos[0], py: v.pos[1], pz: v.pos[2], tx: v.target[0], ty: v.target[1], tz: v.target[2] }, instant);
@@ -239,11 +366,13 @@ export async function createLawnRender(canvas, m, opts = {}) {
   };
   const light = { hemi: 0, sun: 0, porch: 0, spot: 0, window: 0, stars: 0 };
   const setTime = (name, instant) => {
+    sceneDirty = shadowsDirty = true;
     const t = TIMES[name] || TIMES.day;
     scene.background = new THREE.Color(t.sky);
+    scene.environment = name === "night" ? null : dayEnvironment && dayEnvironment.texture;
     scene.fog = new THREE.Fog(t.fog[0], t.fog[1] * (world.fogScale || 1), t.fog[2] * (world.fogScale || 1));
     hemi.color.set(t.hemi[0]); hemi.groundColor.set(t.hemi[1]); sun.color.set(t.sun[0]);
-    sun.position.set(name === "night" ? -12 : 12, 22, name === "night" ? 8 : 18);
+    sun.position.set(name === "night" ? -12 : -18, name === "night" ? 22 : 16, name === "night" ? 8 : 12);
     tween(light, { hemi: t.hemi[2], sun: t.sun[1], porch: t.porch, spot: t.spot, window: t.window, stars: t.stars }, instant);
   };
 
@@ -273,6 +402,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
   const spread = () => { const [a, b] = [...touches.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
   const onDown = (e) => {
     if (e.button && e.button !== 0) return;
+    sceneDirty = shadowsDirty = true;
     touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (edit && touches.size === 2) {
       /* two fingers: pinch to zoom; any drag in progress is dropped where it started */
@@ -286,6 +416,8 @@ export async function createLawnRender(canvas, m, opts = {}) {
     canvas.setPointerCapture(e.pointerId);
   };
   const onMove = (e) => {
+    sceneDirty = true;
+    if (drag?.piece) shadowsDirty = true;
     if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch) { if (touches.size === 2) zoomTo(pinch.dist * pinch.d / spread()); return; }
     if (edit && !drag) { const at = cellAtPointer(e); edit.hover(at); canvas.style.cursor = !at ? "" : at.piece ? "grab" : world.cellType(at.c, at.r) === CELL.ok ? "pointer" : "not-allowed"; return; }
@@ -309,6 +441,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
     } else { camState.px = camState.tx + Math.sin(ang) * drag.rad; camState.pz = camState.tz + Math.cos(ang) * drag.rad; }
   };
   const onUp = (e) => {
+    sceneDirty = shadowsDirty = true;
     touches.delete(e.pointerId);
     if (pinch) { if (touches.size < 2) pinch = null; return; }
     if (!drag) return;
@@ -323,7 +456,7 @@ export async function createLawnRender(canvas, m, opts = {}) {
     }
     if (!d.moved && d.at) opts.onCellClick && opts.onCellClick(d.at.c, d.at.r);
   };
-  const onLeave = () => { if (edit && !drag) { edit.hover(null); canvas.style.cursor = ""; } };
+  const onLeave = () => { if (edit && !drag) { edit.hover(null); canvas.style.cursor = ""; sceneDirty = true; } };
   const onWheel = (e) => {
     if (!edit) return;
     e.preventDefault();
@@ -345,15 +478,20 @@ export async function createLawnRender(canvas, m, opts = {}) {
   const fit = () => {
     const w = canvas.clientWidth || 800, h = canvas.clientHeight || 450;
     renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    sceneDirty = true;
   };
   const ro = new ResizeObserver(() => { fit(); setView(current, true); }); ro.observe(canvas); fit();
   const v3 = new THREE.Vector3();
+  let shadowLight = "";
   const draw = () => {
     hemi.intensity = light.hemi; sun.intensity = light.sun; spot.intensity = light.spot;
     world.setNight(light.window, light.porch);
     starMat.opacity = light.stars * .9;
     applyCam();
-    world.tick && world.tick(camera, target);
+    const crownChanged = world.tick && world.tick(camera, target);
+    const shadowState = `${light.sun},${light.spot}`;
+    renderer.shadowMap.needsUpdate = shadowsDirty || crownChanged || shadowState !== shadowLight || performance.now() < animationUntil;
+    shadowsDirty = false; shadowLight = shadowState;
     if (opts.marker && world.markerAt) {
       const p = world.markerAt();
       if (p) {
@@ -364,7 +502,18 @@ export async function createLawnRender(canvas, m, opts = {}) {
     }
     renderer.render(scene, camera);
   };
-  let raf = 0; const loop = () => { draw(); raf = requestAnimationFrame(loop); }; loop();
+  // Static yards need no continuous GPU work. Camera/light tweens and planting still redraw.
+  let raf = 0, lastState = "";
+  const loop = () => {
+    const state = Object.values(camState).join(",") + Object.values(light).join(",");
+    if (document.visibilityState !== "hidden" && (sceneDirty || state !== lastState || performance.now() < animationUntil)) {
+      draw(); lastState = state; sceneDirty = false;
+    }
+    raf = requestAnimationFrame(loop);
+  };
+  const onVisible = () => { sceneDirty = shadowsDirty = true; };
+  document.addEventListener("visibilitychange", onVisible);
+  loop();
 
   /* the photo strip: one still per angle, alternating morning and 2 AM, each marked as an illustration */
   const NAMES = { street: "Street", close: "Up close", drive: "Driveway side", next: "Next door", above: "Above" };
@@ -387,15 +536,19 @@ export async function createLawnRender(canvas, m, opts = {}) {
     return out;
   };
 
-  if (world.intro && !opts.reduceMotion && window.gsap) world.intro(window.gsap);
+  if (world.intro && !opts.reduceMotion && window.gsap) {
+    const duration = world.intro(window.gsap) || 0;
+    animationUntil = performance.now() + duration + 100;
+  }
 
   return {
     setView, setTime, shots,
     setPieces: (list, o) => { const job = setPieces(list, o); job.then(() => { frameDisplay(); aimSpot(); }); return job; },
-    setFocusCell: (c, r) => edit && edit.focus(c == null ? null : { c, r }),
-    setTarget: (id, y) => world.setTarget && world.setTarget(id, y),
+    setFocusCell: (c, r) => { if (edit) edit.focus(c == null ? null : { c, r }); sceneDirty = true; },
+    setTarget: (id, y) => { if (world.setTarget) world.setTarget(id, y); sceneDirty = shadowsDirty = true; },
     dispose() {
       cancelAnimationFrame(raf); ro.disconnect();
+      document.removeEventListener("visibilitychange", onVisible);
       canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove);
       canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("pointercancel", onUp); canvas.removeEventListener("pointerleave", onLeave);
       canvas.removeEventListener("wheel", onWheel); canvas.removeEventListener("click", onClickPick);
@@ -410,14 +563,14 @@ export async function createLawnRender(canvas, m, opts = {}) {
 }
 
 /* ======================================================================= the typical lawn */
-function buildTypical({ scene, mat, add, flat, W, Dp, cell }, m) {
+function buildTypical({ scene, mat, surfaceMat, foliage, add, flat, W, Dp, cell }, m) {
   const front = Dp / 2;                         /* street side of the lawn */
   const corner = m.shape === "corner";
   const sideW = corner ? m.cornerSideCols * cell : 0;
 
   /* ground, lawn, sidewalk, city strip, curb, road (as in the aerial view: drive on the right) */
-  flat(new THREE.PlaneGeometry(220, 220), mat(COLORS.grass), { y: -.002 });
-  flat(new THREE.PlaneGeometry(W, Dp), mat(COLORS.lawn), { y: .003 });
+  flat(new THREE.PlaneGeometry(220, 220), surfaceMat(COLORS.grass, 220, 220), { y: -.002 });
+  flat(new THREE.PlaneGeometry(W, Dp), surfaceMat(COLORS.lawn, W, Dp), { y: .003 });
   add(new THREE.BoxGeometry(120, .06, 1.5), mat(COLORS.walk), { z: front + .75, y: .03 });
   add(new THREE.BoxGeometry(120, .16, .25), mat(COLORS.curb), { z: front + 1.5 + 1.2 + .12, y: .08 });
   const roadZ = front + 1.5 + 1.2 + .25 + 4;
@@ -456,11 +609,11 @@ function buildTypical({ scene, mat, add, flat, W, Dp, cell }, m) {
   const porchLight = new THREE.PointLight(0xffc77a, 0, 12, 2); porchLight.position.set(hx + .8, 2.1, houseFrontZ + .6); scene.add(porchLight);
 
   /* round trees and a street lamp (left side, in the city strip) */
-  const leafMat = mat(COLORS.leaves), trunkMat = mat(COLORS.trunk);
+  const trunkMat = mat(COLORS.trunk);
   const tree = (x, z, s = 1) => {
     add(new THREE.CylinderGeometry(.18 * s, .24 * s, 2.4 * s, 12), trunkMat, { x, y: 1.2 * s, z, cast: true });
-    add(new THREE.SphereGeometry(1.7 * s, 28, 18), leafMat, { x, y: 3.3 * s, z, cast: true });
-    add(new THREE.SphereGeometry(1.15 * s, 24, 14), leafMat, { x: x + .9 * s, y: 2.8 * s, z: z + .4 * s, cast: true });
+    const crown = foliage(1.9 * s, 3.2 * s, Math.floor(Math.abs(x * 713 + z * 921)));
+    crown.position.set(x, 3.3 * s, z); scene.add(crown);
   };
   tree(-W / 2 - 4.6, -Dp / 2 - 2.5, .95);
   if (!corner) tree(W / 2 + 6.2, -Dp / 2 - 1, 1.1); else tree(-W / 2 - 8, -Dp / 2 - 9, 1.2);
@@ -478,7 +631,7 @@ function buildTypical({ scene, mat, add, flat, W, Dp, cell }, m) {
 }
 
 /* ======================================================================= the surveyed yard */
-function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
+function buildSurveyed({ scene, mat, surfaces, foliage, add, disposables, W, Dp, cell }, m, opts) {
   const { site, yard } = m.survey;
   const F = yard.frame;
   /* yard frame <-> survey (east, north) */
@@ -537,6 +690,9 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
       x.strokeStyle = HEX(COLORS.curbTop); x.lineWidth = (2 * r.half + .36) * PXM; x.stroke();
       x.strokeStyle = HEX(COLORS.road); x.lineWidth = 2 * r.half * PXM; x.stroke();
     }
+    x.save(); x.globalCompositeOperation = "multiply"; x.globalAlpha = .28;
+    const grain = surfaces.get("grass").map.image;
+    x.fillStyle = x.createPattern(grain, "repeat"); x.fillRect(0, 0, TEX, TEX); x.restore();
   };
   paintGround(groundCanvas.getContext("2d"));
   const groundTex = new THREE.CanvasTexture(groundCanvas); groundTex.colorSpace = THREE.SRGBColorSpace;
@@ -606,6 +762,8 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
       tri(P(-A, B, 0), P(-A, -B, 0), P(-A, 0, rise));
     }
     const g = new THREE.BufferGeometry(); g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+    const uv = []; for (let i = 0; i < v.length; i += 3) uv.push(v[i] / 3, (v[i + 2] + v[i + 1]) / 3);
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
     /* both windings: the roof is seen from above and its gable ends from the street */
     g.computeVertexNormals(); return g;
   };
@@ -630,6 +788,12 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
       walls.userData.houseId = b.id; houseMeshes.push(walls);
       const roof = add(roofGeo(r, true), isTarget ? roofMat : nRoofMat, { x: cx, y: eaveY, z: cz, ry, cast: true, parent: g });
       roof.userData.houseId = b.id; houseMeshes.push(roof);
+      // A low foundation and fascia anchor the measured building without changing its footprint.
+      add(new THREE.BoxGeometry(r.len + .04, .24, r.wid + .04), mat(COLORS.curb), { x: cx, y: ground + .02, z: cz, ry, parent: g });
+      for (const sign of [-1, 1]) {
+        const ex = cx + Math.sin(ry) * sign * (r.wid / 2 + .15), ez = cz + Math.cos(ry) * sign * (r.wid / 2 + .15);
+        add(new THREE.BoxGeometry(r.len + .5, .14, .1), trimMat, { x: ex, y: eaveY - .05, z: ez, ry, cast: true, parent: g });
+      }
       top = Math.max(top, gc + r.ridge);
       /* windows on the face toward the street */
       const faces = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([u, v]) => {
@@ -649,7 +813,16 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
         for (const a of wins) {
           const [wx, wz] = at(a, .04);
           add(new THREE.BoxGeometry(1.25, 1.1, .06), isTarget ? windowMat : nWindowMat, { x: wx, y: winY, z: wz, ry: f.face, parent: g });
-          if (isTarget) { const [tx2, tz2] = at(a, .02); add(new THREE.BoxGeometry(1.5, 1.35, .04), trimMat, { x: tx2, y: winY, z: tz2, ry: f.face, parent: g }); }
+          if (isTarget) {
+            const [tx2, tz2] = at(a, .09);
+            for (const sign of [-1, 1]) {
+              add(new THREE.BoxGeometry(1.45, .07, .1), trimMat, { x: tx2, y: winY + sign * .59, z: tz2, ry: f.face, cast: true, parent: g });
+              const [vx, vz] = at(a + sign * .69, .09);
+              add(new THREE.BoxGeometry(.07, 1.25, .1), trimMat, { x: vx, y: winY, z: vz, ry: f.face, cast: true, parent: g });
+            }
+            add(new THREE.BoxGeometry(.04, 1.1, .08), trimMat, { x: tx2, y: winY, z: tz2, ry: f.face, parent: g });
+            add(new THREE.BoxGeometry(1.25, .04, .08), trimMat, { x: tx2, y: winY, z: tz2, ry: f.face, parent: g });
+          }
         }
         if (isTarget) {
           const [dx, dz] = at(0, .05);
@@ -658,15 +831,6 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
           add(new THREE.SphereGeometry(.09, 12, 8), bulbMat, { x: lx, y: gc + 2.15, z: lz, parent: g });
           const [px, pz] = at(.85, .7);
           porchLight = new THREE.PointLight(0xffc77a, 0, 12, 2); porchLight.position.set(px, gc + 2.1, pz); g.add(porchLight);
-          /* their house number by the door */
-          const num = site.geo.number;
-          if (num) {
-            const tex = canvasTex(256, 128, (x2, w, h) => { x2.fillStyle = "#ffffff"; x2.beginPath(); x2.roundRect(4, 4, w - 8, h - 8, 24); x2.fill(); x2.fillStyle = "#2f3130"; x2.font = '800 78px "Host Grotesk", "Segoe UI", sans-serif'; x2.textAlign = "center"; x2.textBaseline = "middle"; x2.fillText(num, w / 2, h / 2 + 4); });
-            disposables.push(tex);
-            const [nx2, nz2] = at(-.95, .06);
-            const plaque = new THREE.MeshBasicMaterial({ map: tex, transparent: true }); disposables.push(plaque);
-            add(new THREE.PlaneGeometry(.56, .28), plaque, { x: nx2, y: gc + 1.75, z: nz2, ry: f.face, parent: g });
-          }
         }
       }
     }
@@ -687,9 +851,8 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
   };
 
   /* ---------------- trees and shrubs from the lidar canopy ---------------- */
-  const leafMats = [mat(COLORS.leaves), mat(COLORS.leaves2)], trunkMat = mat(COLORS.trunk);
+  const trunkMat = mat(COLORS.trunk);
   const crowns = [];
-  const blobGeo = new THREE.IcosahedronGeometry(1, 2); disposables.push(blobGeo);
   for (const t of site.trees) {
     const x = toX(t.x, t.y), z = toZ(t.x, t.y);
     if (Math.abs(x) > R || Math.abs(z) > R) continue;
@@ -699,32 +862,32 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
     add(new THREE.CylinderGeometry(.1 + h * .012, .16 + h * .016, trunkH, 10), trunkMat, { y: trunkH / 2, cast: true, parent: tg2 });
     const seed = Math.abs(Math.sin(t.x * 12.9898 + t.y * 78.233)) * 43758.5453 % 1;
     const crown = new THREE.Group(); crown.position.y = crownY - gy; tg2.add(crown);
-    const blobs = [[0, 0, 0, 1], [.45, -.2, .25, .72], [-.4, -.15, -.3, .7], [.05, .3, -.35, .62]];
-    blobs.forEach(([bx, by, bz, s], i) => {
-      const mm = leafMats[(i + Math.floor(seed * 4)) % 2].clone(); disposables.push(mm);
-      const mesh = new THREE.Mesh(blobGeo, mm); mesh.position.set(bx * r, by * r * .8, bz * r); mesh.scale.set(r * s, r * s * .85, r * s);
-      mesh.castShadow = true; mesh.receiveShadow = true; crown.add(mesh);
-    });
+    crown.add(foliage(r, r * 1.8, Math.floor(seed * 100000), 850));
     crowns.push({ group: crown, tree: tg2, center: new THREE.Vector3(x, crownY, z), r });
   }
   for (const sb of site.shrubs) {
     const x = toX(sb.x, sb.y), z = toZ(sb.x, sb.y);
     if (Math.abs(x) > R || Math.abs(z) > R) continue;
-    const mesh = new THREE.Mesh(blobGeo, leafMats[1]); mesh.position.set(x, groundAt(x, z) + sb.h * .38, z); mesh.scale.set(sb.r, sb.h * .55, sb.r);
+    const mesh = foliage(sb.r, sb.h, Math.floor(Math.abs(x * 123 + z * 829)), 280); mesh.position.set(x, groundAt(x, z) + sb.h * .45, z);
     mesh.castShadow = true; mesh.receiveShadow = true; layers.trees.add(mesh);
   }
   /* crowns between the camera and the display turn to a ghost so the letters stay visible;
      while decorating every crown is a ghost, so the lawn under the trees can be planned */
-  const setCrownOpacity = (c, a) => c.group.children.forEach((mesh) => { mesh.material.transparent = a < 1; mesh.material.opacity = a; mesh.material.depthWrite = a >= 1; });
+  const setCrownOpacity = (c, a) => c.group.children.forEach((mesh) => {
+    mesh.material.transparent = a < 1; mesh.material.opacity = a; mesh.material.depthWrite = a >= 1;
+    mesh.material.alphaTest = .45 * a;
+  });
   const seg = new THREE.Line3(), closest = new THREE.Vector3();
   const tick = (camera, target) => {
+    let changed = false;
     seg.set(camera.position, target);
     for (const c of crowns) {
       seg.closestPointToPoint(c.center, true, closest);
       const blocks = opts.edit || closest.distanceTo(c.center) < c.r * 1.05;
       const a = blocks ? (opts.edit ? .3 : .18) : 1;
-      if (c.a !== a) { setCrownOpacity(c, a); c.a = a; }
+      if (c.a !== a) { setCrownOpacity(c, a); c.a = a; changed = true; }
     }
+    return changed;
   };
 
   /* ---------------- the decorating grid, draped over the real lawn ---------------- */
@@ -790,11 +953,12 @@ function buildSurveyed({ scene, mat, add, disposables, W, Dp, cell }, m, opts) {
     const dist = (o) => { const b = new THREE.Box3().setFromObject(o); const c = b.getCenter(new THREE.Vector3()); return Math.hypot(c.x, c.z); };
     kids.forEach((g) => { g.scale.y = .001; });
     trees.forEach((t) => t.scale.setScalar(.001));
-    G.timeline()
+    const timeline = G.timeline()
       .from(layers.ground.position, { y: -1.2, duration: .7, ease: "expo.out" })
       .to(kids.map((g) => g.scale), { y: 1, duration: .55, ease: "back.out(1.6)", stagger: { each: .04, from: 0 } }, .25)
       .to(trees.map((t) => t.scale), { x: 1, y: 1, z: 1, duration: .5, ease: "back.out(1.8)", stagger: .025 }, .55);
     void dist;
+    return timeline.duration() * 1000;
   };
 
   /* the street lamp's light (no post: we don't know where theirs stands) */

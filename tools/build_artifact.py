@@ -35,6 +35,7 @@ def main():
     (DIST / "css").mkdir(parents=True)
     (DIST / "js").mkdir()
     (DIST / "img").mkdir()
+    shutil.copytree(ROOT / "assets" / "environments", DIST / "assets" / "environments")
     (DIST / "index.html").write_text(html, encoding="utf-8")
     shutil.copy2(ROOT / "css" / "site.css", DIST / "css" / "site.css")
     for script in sorted((ROOT / "js").glob("*.js")):
